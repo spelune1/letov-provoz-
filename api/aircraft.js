@@ -1,70 +1,77 @@
-// Serverless funkce pro Vercel (/api/aircraft)
-// Bezpečně přeposílá požadavky na povolené komunitní ADS-B zdroje a přidává CORS hlavičky.
-
-const ALLOWED_PREFIXES = [
-  'https://opendata.adsb.fi/api/v3/',
-  'https://api.adsb.lol/v2/point/',
-  'https://api.airplanes.live/v2/point/'
+// Vercel Serverless Function: /api/aircraft?url=<encoded upstream URL>
+// Proxy only the three known public ADS-B endpoints. This allowlist prevents
+// the endpoint from becoming an open proxy / SSRF primitive.
+const ALLOWED = [
+  { host: "opendata.adsb.fi", path: /^\/api\/v3\/lat\/-?\d+(?:\.\d+)?\/lon\/-?\d+(?:\.\d+)?\/dist\/\d+$/ },
+  { host: "api.adsb.lol", path: /^\/v2\/point\/-?\d+(?:\.\d+)?\/-?\d+(?:\.\d+)?\/\d+$/ },
+  { host: "api.airplanes.live", path: /^\/v2\/point\/-?\d+(?:\.\d+)?\/-?\d+(?:\.\d+)?\/\d+$/ }
 ];
 
-export default async function handler(req, res) {
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Accept');
-  res.setHeader('Cache-Control', 'no-store, max-age=0');
+module.exports = async function handler(req, res) {
+  res.setHeader("Cache-Control", "no-store, max-age=0");
+  res.setHeader("Content-Type", "application/json; charset=utf-8");
 
-  if (req.method === 'OPTIONS') {
-    return res.status(204).end();
+  if (req.method !== "GET") {
+    res.setHeader("Allow", "GET");
+    return res.status(405).json({ error: "Pouze metoda GET." });
   }
 
-  if (req.method !== 'GET') {
-    return res.status(405).json({ error: 'Povolena je pouze metoda GET' });
-  }
-
-  const targetUrl = typeof req.query?.url === 'string' ? req.query.url.trim() : '';
-
-  if (!targetUrl || !ALLOWED_PREFIXES.some((prefix) => targetUrl.startsWith(prefix))) {
-    return res.status(403).json({
-      error: 'Nepovolená cílová adresa ADS-B zdroje'
+  const rawUrl = typeof req.query.url === "string" ? req.query.url : "";
+  if (!rawUrl) {
+    return res.status(400).json({
+      error: "Chybí parametr url.",
+      help: "Použij /api/aircraft?url=https%3A%2F%2F..."
     });
+  }
+
+  let target;
+  try {
+    target = new URL(rawUrl);
+  } catch (_) {
+    return res.status(400).json({ error: "Neplatná cílová URL." });
+  }
+
+  if (target.protocol !== "https:" || target.username || target.password) {
+    return res.status(400).json({ error: "Povoleny jsou pouze HTTPS adresy." });
+  }
+
+  const allowed = ALLOWED.some(
+    item => target.hostname === item.host && item.path.test(target.pathname)
+  );
+  if (!allowed) {
+    return res.status(403).json({ error: "Tento datový zdroj není povolen." });
   }
 
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 7000);
+  const timeout = setTimeout(() => controller.abort(), 6500);
 
   try {
-    const upstream = await fetch(targetUrl, {
-      method: 'GET',
-      signal: controller.signal,
+    const upstream = await fetch(target.toString(), {
+      method: "GET",
       headers: {
-        'Accept': 'application/json, text/plain, /',
-        'Accept-Language': 'en-US,en;q=0.9,cs;q=0.8',
-        'User-Agent': 'Mozilla/5.0 (compatible; LetovyRadarGPS/1.0; +https://vercel.app)'
-      }
+        "Accept": "application/json",
+        "User-Agent": "LetovyRadar/1.0 (personal ADS-B map)"
+      },
+      cache: "no-store",
+      signal: controller.signal
     });
 
-    const text = await upstream.text();
-
-    if (!upstream.ok) {
-      const safeStatus = upstream.status >= 400 && upstream.status < 600 ? upstream.status : 502;
-      return res.status(safeStatus).json({
-        error: Upstream HTTP ${upstream.status},
-        upstreamStatus: upstream.status,
-        details: text.slice(0, 200)
-      });
-    }
-
-    res.setHeader('Content-Type', 'application/json; charset=utf-8');
-    return res.status(200).send(text);
-  } catch (err) {
-    const isTimeout = err && err.name === 'AbortError';
-    const causeMsg = err?.cause?.message || err?.cause?.code || '';
-    return res.status(isTimeout ? 504 : 502).json({
-      error: isTimeout
-        ? 'Upstream timeout (7 s)'
-        : ${err?.message || 'Chyba spojení se zdrojem'}${causeMsg ? ` (${causeMsg}) : ''}`
+    const body = await upstream.text();
+    // Preserve the provider's HTTP status so the frontend can distinguish
+    // provider errors (e.g. 429/503) from proxy crashes.
+    res.status(upstream.status);
+    res.setHeader(
+      "Content-Type",
+      upstream.headers.get("content-type") || "application/json; charset=utf-8"
+    );
+    return res.send(body);
+  } catch (error) {
+    const timedOut = error && error.name === "AbortError";
+    return res.status(timedOut ? 504 : 502).json({
+      error: timedOut ? "Datový zdroj neodpověděl v limitu 6,5 sekundy." : "Nepodařilo se spojit s datovým zdrojem.",
+      details: error && error.message ? error.message : String(error)
     });
   } finally {
-    clearTimeout(timeoutId);
+    clearTimeout(timeout);
   }
-}
+};
