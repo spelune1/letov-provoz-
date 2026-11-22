@@ -1,0 +1,711 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no" />
+  <title>Letový radar – GPS</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: #0b1220;
+      color: #eef3ff;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+    }
+    header {
+      padding: 14px 16px;
+      background: #101b2e;
+      box-shadow: 0 2px 10px #0005;
+    }
+    h1 {
+      font-size: 20px;
+      margin: 0 0 5px;
+    }
+    header p {
+      margin: 0;
+      color: #a9bbd6;
+      font-size: 12px;
+    }
+    .stats {
+      display: flex;
+      gap: 10px;
+      padding: 10px 12px;
+    }
+    .stat {
+      flex: 1;
+      background: #142238;
+      border-radius: 12px;
+      padding: 10px;
+    }
+    .stat b {
+      font-size: 22px;
+      display: block;
+    }
+    .stat span {
+      font-size: 12px;
+      color: #a9bbd6;
+    }
+    #map {
+      height: 58vh;
+      min-height: 350px;
+      border-top: 1px solid #25354d;
+      border-bottom: 1px solid #25354d;
+    }
+    .bottom {
+      padding: 12px 14px;
+      font-size: 13px;
+      color: #b8c7dd;
+      line-height: 1.45;
+    }
+    .status {
+      /* Pevná výška: proměnlivý stavový text už neposouvá mapu. */
+      height: 108px;
+      min-height: 108px;
+      max-height: 108px;
+      padding: 9px 14px;
+      font-size: 12px;
+      line-height: 1.4;
+      overflow-y: auto;
+      overflow-x: hidden;
+      overflow-wrap: anywhere;
+      scrollbar-width: thin;
+      overscroll-behavior: contain;
+    }
+    .plane-icon {
+      font-size: 26px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 32px;
+      height: 32px;
+      text-shadow: 0 1px 5px #000;
+      filter: drop-shadow(0 2px 3px #0008);
+      transition: transform 0.25s linear, opacity 0.25s ease;
+    }
+    .plane-icon.stale {
+      opacity: 0.65;
+    }
+    button {
+      border: 0;
+      border-radius: 9px;
+      background: #2563eb;
+      color: white;
+      padding: 10px 13px;
+      font-weight: 650;
+      cursor: pointer;
+    }
+    .leaflet-popup-content-wrapper,
+    .leaflet-popup-tip {
+      background: #142238;
+      color: #f0f5ff;
+    }
+    .leaflet-popup-content {
+      margin: 12px;
+      line-height: 1.6;
+    }
+    .leaflet-container {
+      background: #172334;
+    }
+    .alertbar {
+      padding: 10px 14px;
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+    .alertbar select {
+      background: #142238;
+      color: #fff;
+      border: 1px solid #33465f;
+      border-radius: 8px;
+      padding: 8px;
+    }
+    .alertbox {
+      background: #142238;
+      border-radius: 10px;
+      padding: 10px 14px;
+      margin: 0 12px 8px;
+      color: #cbd5e1;
+      font-size: 13px;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>✈️ Letový radar – GPS</h1>
+    <p id="locationText">Zjišťuji polohu…</p>
+  </header>
+
+  <div class="stats">
+    <div class="stat"><b id="count">—</b><span>Letadel v dosahu</span></div>
+    <div class="stat"><b id="update">—</b><span>Poslední aktualizace</span></div>
+  </div>
+
+  <div class="alertbar">
+    <button id="enableAlerts" type="button">🔔 Zapnout upozornění</button>
+    <label for="displayRadius">Dosah mapy:</label>
+    <select id="displayRadius">
+      <option>10</option>
+      <option>20</option>
+      <option>30</option>
+      <option>40</option>
+      <option>50</option>
+      <option>100</option>
+      <option>150</option>
+      <option>200</option>
+      <option>300</option>
+      <option>500</option>
+    </select>
+    <label for="alertRadius">Upozornění:</label>
+    <select id="alertRadius">
+      <option>2</option>
+      <option>3</option>
+      <option selected>5</option>
+      <option>10</option>
+    </select>
+    <button id="refresh" type="button">Obnovit</button>
+  </div>
+
+  <div class="alertbox" id="alertInfo">
+    Povol polohu telefonu. Radar využije dostupné polohové služby a ponechá poslední známou polohu při výpadku.
+  </div>
+
+  <div class="alertbar" style="padding-top:0">
+    <label for="proxyInput" style="font-size:12px;color:#a9bbd6">Vlastní proxy (na Vercelu automaticky /api/aircraft):</label>
+    <input id="proxyInput" type="text" placeholder="/api/aircraft?url= nebo https://tvoje-app.vercel.app/api/aircraft?url=" style="flex:1;min-width:190px;background:#142238;color:#fff;border:1px solid #33465f;border-radius:8px;padding:8px;font-size:12px" />
+    <button id="saveProxy" type="button" style="padding:8px 11px;font-size:12px">Uložit</button>
+  </div>
+
+  <div id="map"></div>
+  <div class="status" id="status">Čekám na polohu…</div>
+
+  <div class="bottom">
+    Data jsou z komunitních ADS-B zdrojů adsb.fi a ADSB.lol (přes serverový prostředník /api/aircraft). Každý zdroj se načítá nezávisle s limitem 7 sekund. Obnova přibližně každých 20 sekund, letadla zůstávají na mapě až 90 sekund bez nového potvrzení. Vzdálenosti jsou vzdušnou čarou.
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script>
+    (() => {
+      const RETENTION_MS = 90000;
+      const SOURCE_TIMEOUT_MS = 7000;
+      const REFRESH_INTERVAL_MS = 20000;
+      const DEFAULT_PROXY_URL = window.location.protocol.startsWith('http') && !window.location.hostname.endsWith('github.io')
+        ? '/api/aircraft?url='
+        : '';
+
+      function normalizeProxyBase(raw) {
+        const trimmed = (raw || '').trim();
+        if (!trimmed) return '';
+        if (trimmed.startsWith('/')) {
+          return trimmed.includes('?')
+            ? (trimmed.endsWith('=') || trimmed.endsWith('&') || trimmed.endsWith('?') ? trimmed : trimmed + '&url=')
+            : trimmed.replace(/\/+$/, '') + '?url=';
+        }
+        return trimmed.includes('?')
+          ? (trimmed.endsWith('=') || trimmed.endsWith('&') || trimmed.endsWith('?') ? trimmed : trimmed + '&url=')
+          : trimmed.replace(/\/+$/, '') + '/?url=';
+      }
+
+      const urlParamProxy = new URLSearchParams(window.location.search).get('proxy');
+      if (urlParamProxy) {
+        try { localStorage.setItem('radar_proxy_url', urlParamProxy.trim()); } catch (e) {}
+      }
+      let customProxyUrl = normalizeProxyBase(
+        urlParamProxy || (() => { try { return localStorage.getItem('radar_proxy_url'); } catch (e) { return ''; } })() || DEFAULT_PROXY_URL
+      );
+
+      const proxyInputEl = document.getElementById('proxyInput');
+      if (proxyInputEl) {
+        proxyInputEl.value = customProxyUrl;
+      }
+
+      let lat = null;
+      let lon = null;
+      let lastFix = null;
+      let displayKm = 10;
+      let alertKm = 5;
+      let alertsEnabled = false;
+      let watchId = null;
+      const trackedAircraft = new Map();
+      const insideAlerts = new Set();
+      let fetchBusy = false;
+      let hasSuccessfulSourceOnce = false;
+
+      const map = L.map('map').setView([50.3102143, 12.9507147], 13);
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        maxZoom: 19,
+        attribution: '© OpenStreetMap'
+      }).addTo(map);
+
+      const circle = L.circle([50.3102143, 12.9507147], {
+        radius: displayKm * 1000,
+        color: '#38bdf8',
+        weight: 2,
+        fillColor: '#38bdf8',
+        fillOpacity: 0.07
+      }).addTo(map);
+
+      const centerMarker = L.marker([50.3102143, 12.9507147])
+        .addTo(map)
+        .bindPopup('Střed sledování');
+
+      function distance(a, b) {
+        const R = 6371000;
+        const p1 = (a.lat * Math.PI) / 180;
+        const p2 = (b.lat * Math.PI) / 180;
+        const dlat = ((b.lat - a.lat) * Math.PI) / 180;
+        const dlon = ((b.lon - a.lon) * Math.PI) / 180;
+        const x =
+          Math.sin(dlat / 2) ** 2 +
+          Math.cos(p1) * Math.cos(p2) * Math.sin(dlon / 2) ** 2;
+        return 2 * R * Math.atan2(Math.sqrt(x), Math.sqrt(1 - x));
+      }
+
+      function val(v, u = '') {
+        return v === undefined || v === null || v === '' ? 'Neznámé' : v + u;
+      }
+
+      function normalizeHex(rawHex) {
+        if (!rawHex || typeof rawHex !== 'string') return '';
+        return rawHex.trim().toLowerCase().replace(/^~/, '');
+      }
+
+      function setLocation(a, b, accuracy) {
+        lat = a;
+        lon = b;
+        lastFix = { lat: a, lon: b, accuracy, time: Date.now() };
+        circle.setLatLng([lat, lon]);
+        circle.setRadius(displayKm * 1000);
+        centerMarker.setLatLng([lat, lon]);
+        map.setView([lat, lon], map.getZoom());
+        document.getElementById('locationText').textContent =
+          `Poloha telefonu: ${lat.toFixed(5)}, ${lon.toFixed(5)}${accuracy ? ` (±${Math.round(accuracy)} m)` : ''}`;
+        refresh();
+      }
+
+      function playBeep() {
+        try {
+          const c = new (window.AudioContext || window.webkitAudioContext)();
+          const o = c.createOscillator();
+          const g = c.createGain();
+          o.type = 'sine';
+          o.frequency.value = 880;
+          g.gain.value = 0.15;
+          o.connect(g);
+          g.connect(c.destination);
+          o.start();
+          o.stop(c.currentTime + 0.25);
+        } catch (e) {}
+      }
+
+      function notify(a, d) {
+        if (!alertsEnabled) return;
+        const id = normalizeHex(a.hex) || `${a.lat},${a.lon}`;
+        if (d <= alertKm * 1000 && !insideAlerts.has(id)) {
+          insideAlerts.add(id);
+          const name = a.flight?.trim() || id.toUpperCase() || 'Neznámé letadlo';
+          const msg = `${name} je ${Math.round(d / 100) / 10} km od tebe`;
+          document.getElementById('alertInfo').textContent = '✈️ ' + msg;
+          if ('Notification' in window && Notification.permission === 'granted') {
+            try {
+              new Notification('Letadlo v okolí', { body: msg });
+            } catch (e) {}
+          }
+          playBeep();
+        } else if (d > alertKm * 1000) {
+          insideAlerts.delete(id);
+        }
+      }
+
+      function mapOpenSkyState(s) {
+        if (!Array.isArray(s) || s.length < 11) return null;
+        const hex = normalizeHex(s[0]);
+        const aLon = Number(s[5]);
+        const aLat = Number(s[6]);
+        if (!hex || !Number.isFinite(aLat) || !Number.isFinite(aLon)) return null;
+
+        const onGround = Boolean(s[8]);
+        const baroAltM = Number(s[7]);
+        const geoAltM = Number(s[13]);
+        const altM = Number.isFinite(baroAltM) ? baroAltM : geoAltM;
+        const altFt = onGround ? 'ground' : (Number.isFinite(altM) ? Math.round(altM * 3.28084) : null);
+
+        const velMs = Number(s[9]);
+        const gsKt = Number.isFinite(velMs) ? velMs * 1.94384 : null;
+        const trackDeg = Number.isFinite(Number(s[10])) ? Number(s[10]) : null;
+        const vRateMs = Number(s[11]);
+        const baroRateFpm = Number.isFinite(vRateMs) ? vRateMs * 196.8504 : null;
+
+        return {
+          hex,
+          flight: typeof s[1] === 'string' ? s[1].trim() : '',
+          lat: aLat,
+          lon: aLon,
+          alt_baro: altFt,
+          gs: gsKt,
+          track: trackDeg,
+          baro_rate: baroRateFpm,
+          squawk: s[14] || null
+        };
+      }
+
+      function formatErrorDetail(rawDetail) {
+        if (!rawDetail) return '';
+        if (typeof rawDetail === 'string') return rawDetail.slice(0, 120);
+        try {
+          return JSON.stringify(rawDetail).slice(0, 120);
+        } catch {
+          return 'chyba';
+        }
+      }
+
+      async function fetchSource(source) {
+        const targetUrl = source.supportsDirectCors || !customProxyUrl
+          ? source.url
+          : customProxyUrl + encodeURIComponent(source.url);
+
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), SOURCE_TIMEOUT_MS);
+
+        try {
+          const r = await fetch(targetUrl, {
+            cache: 'no-store',
+            signal: controller.signal,
+            headers: { Accept: 'application/json' }
+          });
+          const rawText = await r.text();
+          if (!r.ok) {
+            let errDetail = '';
+            try {
+              const errJson = JSON.parse(rawText);
+              errDetail = formatErrorDetail(errJson.error || errJson.details || '');
+            } catch (_) {
+              errDetail = formatErrorDetail(rawText);
+            }
+            throw new Error(`HTTP ${r.status}${errDetail ? `: ${errDetail}` : ''}`);
+          }
+          let j;
+          try {
+            j = JSON.parse(rawText);
+          } catch {
+            throw new Error('Neplatný JSON');
+          }
+
+          let aircraft;
+          if (source.type === 'opensky') {
+            if (!Array.isArray(j.states)) {
+              aircraft = [];
+            } else {
+              aircraft = j.states.map(mapOpenSkyState).filter(Boolean);
+            }
+          } else {
+            aircraft = j.ac || j.aircraft;
+            if (!Array.isArray(aircraft)) {
+              throw new Error('Chybí seznam letadel');
+            }
+          }
+
+          return { label: source.label, ok: true, aircraft, error: null };
+        } catch (e) {
+          let reason = e.message || String(e);
+          if (e.name === 'AbortError') {
+            reason = 'timeout 7 s';
+          } else if (reason === 'Failed to fetch' || reason.includes('NetworkError') || reason.includes('Load failed')) {
+            reason = source.supportsDirectCors
+              ? 'chyba sítě'
+              : (customProxyUrl ? 'chyba proxy / sítě' : 'blokováno CORS (vyžaduje vlastní proxy)');
+          }
+          return { label: source.label, ok: false, aircraft: [], error: `${source.label}: ${reason}` };
+        } finally {
+          clearTimeout(timer);
+        }
+      }
+
+      function mergeAircraftRecord(oldRec, newRec) {
+        if (!oldRec) return { ...newRec };
+        return {
+          ...oldRec,
+          ...newRec,
+          hex: normalizeHex(newRec.hex || oldRec.hex),
+          flight: (newRec.flight && newRec.flight.trim()) ? newRec.flight.trim() : (oldRec.flight || ''),
+          r: newRec.r || oldRec.r,
+          t: newRec.t || oldRec.t,
+          alt_baro: newRec.alt_baro !== undefined && newRec.alt_baro !== null ? newRec.alt_baro : oldRec.alt_baro,
+          gs: Number.isFinite(Number(newRec.gs)) ? Number(newRec.gs) : oldRec.gs,
+          track: Number.isFinite(Number(newRec.track)) ? Number(newRec.track) : oldRec.track,
+          baro_rate: Number.isFinite(Number(newRec.baro_rate)) ? Number(newRec.baro_rate) : oldRec.baro_rate,
+          squawk: newRec.squawk || oldRec.squawk
+        };
+      }
+
+      function buildPopupHtml(a, distMeters, isStale, ageSec) {
+        const hexUpper = normalizeHex(a.hex).toUpperCase();
+        const name = (a.flight && a.flight.trim()) || hexUpper || 'Neznámý let';
+        const statusLine = isStale
+          ? `<br><span style="color:#fbbf24">Poslední známá poloha (před ${ageSec} s)</span>`
+          : '';
+        return (
+          `<b>${name}</b>` +
+          `<br>ICAO: ${val(hexUpper)}` +
+          `<br>Registrace: ${val(a.r)}` +
+          `<br>Typ: ${val(a.t)}` +
+          `<br>Výška: ${val(a.alt_baro === 'ground' ? 'Na zemi' : a.alt_baro, a.alt_baro === 'ground' ? '' : ' ft')}` +
+          `<br>Rychlost: ${val(Number.isFinite(Number(a.gs)) ? Math.round(Number(a.gs)) : null, ' kt')}` +
+          `<br>Směr: ${val(Number.isFinite(Number(a.track)) ? Math.round(Number(a.track)) : null, '°')}` +
+          `<br>Vertikální rychlost: ${val(Number.isFinite(Number(a.baro_rate)) ? Math.round(Number(a.baro_rate)) : null, ' ft/min')}` +
+          `<br>Squawk: ${val(a.squawk)}` +
+          `<br>Vzdálenost: ${(distMeters / 1000).toFixed(2)} km` +
+          statusLine
+        );
+      }
+
+      function upsertAircraftMarker(id, a, distMeters, isStale, ageSec) {
+        const heading = Number.isFinite(Number(a.track)) ? Number(a.track) : 0;
+        const popupHtml = buildPopupHtml(a, distMeters, isStale, ageSec);
+        const existing = trackedAircraft.get(id);
+
+        if (existing) {
+          existing.marker.setLatLng([a.lat, a.lon]);
+          const iconEl = existing.marker.getElement()?.querySelector('.plane-icon');
+          if (iconEl) {
+            iconEl.style.transform = `rotate(${heading}deg)`;
+            iconEl.classList.toggle('stale', isStale);
+          } else {
+            existing.marker.setIcon(
+              L.divIcon({
+                className: '',
+                html: `<div class="plane-icon${isStale ? ' stale' : ''}" style="transform:rotate(${heading}deg)">✈</div>`,
+                iconSize: [32, 32],
+                iconAnchor: [16, 16]
+              })
+            );
+          }
+          if (existing.marker.getPopup()) {
+            existing.marker.getPopup().setContent(popupHtml);
+          }
+        } else {
+          const icon = L.divIcon({
+            className: '',
+            html: `<div class="plane-icon${isStale ? ' stale' : ''}" style="transform:rotate(${heading}deg)">✈</div>`,
+            iconSize: [32, 32],
+            iconAnchor: [16, 16]
+          });
+          const marker = L.marker([a.lat, a.lon], { icon }).addTo(map).bindPopup(popupHtml);
+          trackedAircraft.set(id, {
+            marker,
+            data: a,
+            lastSeen: Date.now()
+          });
+        }
+      }
+
+      function pruneExpiredAircraft(now) {
+        for (const [id, entry] of trackedAircraft.entries()) {
+          const age = now - entry.lastSeen;
+          const distMeters = distance({ lat, lon }, { lat: entry.data.lat, lon: entry.data.lon });
+          if (age > RETENTION_MS || distMeters > displayKm * 1000) {
+            map.removeLayer(entry.marker);
+            trackedAircraft.delete(id);
+            insideAlerts.delete(id);
+          } else if (age > 0) {
+            upsertAircraftMarker(id, entry.data, distMeters, true, Math.round(age / 1000));
+          }
+        }
+      }
+
+      function updateCountDisplay(anySourceSucceeded) {
+        const totalVisible = trackedAircraft.size;
+        if (!anySourceSucceeded && totalVisible === 0 && !hasSuccessfulSourceOnce) {
+          document.getElementById('count').textContent = '—';
+        } else {
+          document.getElementById('count').textContent = totalVisible;
+        }
+      }
+
+      function getBoundingBox(centerLat, centerLon, radiusKm) {
+        const latDelta = radiusKm / 111.32;
+        const cosLat = Math.max(0.1, Math.cos((centerLat * Math.PI) / 180));
+        const lonDelta = radiusKm / (111.32 * cosLat);
+        return {
+          lamin: Math.max(-90, centerLat - latDelta).toFixed(4),
+          lamax: Math.min(90, centerLat + latDelta).toFixed(4),
+          lomin: Math.max(-180, centerLon - lonDelta).toFixed(4),
+          lomax: Math.min(180, centerLon + lonDelta).toFixed(4)
+        };
+      }
+
+      async function refresh() {
+        if (lat === null || lon === null || fetchBusy) return;
+        fetchBusy = true;
+        document.getElementById('status').textContent = 'Načítám ADS-B data…';
+
+        try {
+          const distNm = Math.max(1, Math.min(250, Math.ceil(displayKm / 1.852)));
+          const latFixed = lat.toFixed(5);
+          const lonFixed = lon.toFixed(5);
+          const bbox = getBoundingBox(lat, lon, displayKm);
+
+          const sources = [
+            {
+              label: 'adsb.fi',
+              type: 'adsbx',
+              supportsDirectCors: false,
+              url: `https://opendata.adsb.fi/api/v3/lat/${latFixed}/lon/${lonFixed}/dist/${distNm}`
+            },
+            {
+              label: 'ADSB.lol',
+              type: 'adsbx',
+              supportsDirectCors: false,
+              url: `https://api.adsb.lol/v2/point/${latFixed}/${lonFixed}/${distNm}`
+            }
+          ];
+
+          const results = await Promise.all(sources.map((s) => fetchSource(s)));
+          const okSources = results.filter((r) => r.ok);
+          if (okSources.length > 0) {
+            hasSuccessfulSourceOnce = true;
+          }
+
+          const merged = new Map();
+          okSources.forEach((src) => {
+            src.aircraft.forEach((raw) => {
+              const hex = normalizeHex(raw.hex);
+              const aLat = Number(raw.lat);
+              const aLon = Number(raw.lon);
+              if (!hex || !Number.isFinite(aLat) || !Number.isFinite(aLon)) return;
+              if (Math.abs(aLat) > 90 || Math.abs(aLon) > 180) return;
+
+              const normalized = { ...raw, hex, lat: aLat, lon: aLon };
+              merged.set(hex, mergeAircraftRecord(merged.get(hex), normalized));
+            });
+          });
+
+          const now = Date.now();
+          const freshAircraft = [...merged.values()].filter(
+            (a) => distance({ lat, lon }, { lat: a.lat, lon: a.lon }) <= displayKm * 1000
+          );
+
+          freshAircraft.forEach((a) => {
+            const id = a.hex;
+            const d = distance({ lat, lon }, { lat: a.lat, lon: a.lon });
+            notify(a, d);
+            upsertAircraftMarker(id, a, d, false, 0);
+            const record = trackedAircraft.get(id);
+            if (record) {
+              record.data = a;
+              record.lastSeen = now;
+            }
+          });
+
+          pruneExpiredAircraft(now);
+          updateCountDisplay(okSources.length > 0);
+
+          if (okSources.length > 0) {
+            document.getElementById('update').textContent = new Date().toLocaleTimeString('cs-CZ', {
+              hour: '2-digit',
+              minute: '2-digit',
+              second: '2-digit'
+            });
+          }
+
+          const totalVisible = trackedAircraft.size;
+          const retainedCount = Math.max(0, totalVisible - freshAircraft.length);
+          const sourceSummary = results
+            .map((r) => `${r.label}: ${r.ok ? r.aircraft.length : 'chyba'}`)
+            .join(', ');
+          const errs = results.map((r) => r.error).filter(Boolean);
+          const retainedInfo = retainedCount > 0 ? ` (${retainedCount} v 90s paměti)` : '';
+
+          if (okSources.length === 0) {
+            document.getElementById('status').textContent =
+              `Nepodařilo se načíst žádný zdroj${totalVisible > 0 ? ` – zobrazuji ${totalVisible} letadel z posledních 90 s` : ''}. ` +
+              `Chyby: ${errs.join(' | ')}`;
+          } else {
+            document.getElementById('status').textContent =
+              `${totalVisible} letadel / ${displayKm} km${retainedInfo}. Zdroje: ${sourceSummary}.` +
+              (errs.length ? ` Poznámka: ${errs.join(' | ')}` : ' Všechny zdroje OK.');
+          }
+        } catch (e) {
+          document.getElementById('status').textContent = 'Chyba zpracování dat: ' + e.message;
+        } finally {
+          fetchBusy = false;
+        }
+      }
+
+      document.getElementById('displayRadius').addEventListener('change', (e) => {
+        displayKm = Number(e.target.value);
+        circle.setRadius(displayKm * 1000);
+        refresh();
+      });
+
+      document.getElementById('alertRadius').addEventListener('change', (e) => {
+        alertKm = Number(e.target.value);
+        insideAlerts.clear();
+      });
+
+      document.getElementById('enableAlerts').addEventListener('click', async () => {
+        alertsEnabled = true;
+        if ('Notification' in window) {
+          try {
+            const p = await Notification.requestPermission();
+            document.getElementById('alertInfo').textContent =
+              p === 'granted'
+                ? 'Upozornění zapnutá – zvuk a notifikace při vstupu do zvoleného okruhu.'
+                : 'Zvuk při otevřené aplikaci zapnut; systémové notifikace nebyly povoleny.';
+          } catch (e) {
+            document.getElementById('alertInfo').textContent =
+              'Zvuková upozornění zapnutá při otevřené aplikaci.';
+          }
+        } else {
+          document.getElementById('alertInfo').textContent =
+            'Zvuková upozornění zapnutá při otevřené aplikaci.';
+        }
+      });
+
+      document.getElementById('refresh').addEventListener('click', refresh);
+
+      document.getElementById('saveProxy').addEventListener('click', () => {
+        const raw = document.getElementById('proxyInput').value.trim();
+        try {
+          if (raw) localStorage.setItem('radar_proxy_url', raw);
+          else localStorage.removeItem('radar_proxy_url');
+        } catch (e) {}
+        customProxyUrl = normalizeProxyBase(raw);
+        document.getElementById('proxyInput').value = customProxyUrl;
+        refresh();
+      });
+
+      if ('geolocation' in navigator) {
+        watchId = navigator.geolocation.watchPosition(
+          (p) => {
+            setLocation(p.coords.latitude, p.coords.longitude, p.coords.accuracy);
+          },
+          () => {
+            if (lastFix) {
+              document.getElementById('status').textContent =
+                'Poloha dočasně nedostupná – používám poslední známou polohu.';
+            } else {
+              document.getElementById('status').textContent =
+                'Poloha není dostupná. Povol přístup k poloze a zkus Obnovit nebo otevři aplikaci venku.';
+            }
+          },
+          { enableHighAccuracy: true, maximumAge: 15000, timeout: 20000 }
+        );
+      } else {
+        document.getElementById('status').textContent = 'Tento prohlížeč nepodporuje geolokaci.';
+      }
+
+      setInterval(() => {
+        if (lat !== null && lon !== null) {
+          pruneExpiredAircraft(Date.now());
+          updateCountDisplay(hasSuccessfulSourceOnce);
+        }
+      }, 5000);
+
+      setInterval(refresh, REFRESH_INTERVAL_MS);
+    })();
+  </script>
+</body>
+</html>
