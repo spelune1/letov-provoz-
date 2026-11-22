@@ -37,16 +37,19 @@ export default async function handler(req, res) {
       method: 'GET',
       signal: controller.signal,
       headers: {
-        'Accept': 'application/json',
-        'User-Agent': 'LetovyRadarGPS/1.0'
+        'Accept': 'application/json, text/plain, /',
+        'Accept-Language': 'en-US,en;q=0.9,cs;q=0.8',
+        'User-Agent': 'Mozilla/5.0 (compatible; LetovyRadarGPS/1.0; +https://vercel.app)'
       }
     });
 
     const text = await upstream.text();
 
     if (!upstream.ok) {
-      return res.status(upstream.status).json({
+      const safeStatus = upstream.status >= 400 && upstream.status < 600 ? upstream.status : 502;
+      return res.status(safeStatus).json({
         error: Upstream HTTP ${upstream.status},
+        upstreamStatus: upstream.status,
         details: text.slice(0, 200)
       });
     }
@@ -55,8 +58,11 @@ export default async function handler(req, res) {
     return res.status(200).send(text);
   } catch (err) {
     const isTimeout = err && err.name === 'AbortError';
+    const causeMsg = err?.cause?.message || err?.cause?.code || '';
     return res.status(isTimeout ? 504 : 502).json({
-      error: isTimeout ? 'Upstream timeout (7 s)' : (err?.message || 'Chyba spojení se zdrojem')
+      error: isTimeout
+        ? 'Upstream timeout (7 s)'
+        : ${err?.message || 'Chyba spojení se zdrojem'}${causeMsg ? ` (${causeMsg}) : ''}`
     });
   } finally {
     clearTimeout(timeoutId);
