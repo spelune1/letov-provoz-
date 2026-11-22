@@ -341,6 +341,16 @@
         };
       }
 
+      function formatErrorDetail(rawDetail) {
+        if (!rawDetail) return '';
+        if (typeof rawDetail === 'string') return rawDetail.slice(0, 120);
+        try {
+          return JSON.stringify(rawDetail).slice(0, 120);
+        } catch {
+          return 'chyba';
+        }
+      }
+
       async function fetchSource(source) {
         const targetUrl = source.supportsDirectCors || !customProxyUrl
           ? source.url
@@ -360,9 +370,9 @@
             let errDetail = '';
             try {
               const errJson = JSON.parse(rawText);
-              errDetail = errJson.error || errJson.details || '';
+              errDetail = formatErrorDetail(errJson.error || errJson.details || '');
             } catch (_) {
-              errDetail = rawText.slice(0, 80);
+              errDetail = formatErrorDetail(rawText);
             }
             throw new Error(`HTTP ${r.status}${errDetail ? `: ${errDetail}` : ''}`);
           }
